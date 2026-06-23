@@ -1,0 +1,16 @@
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+
+# 运行时输出
+dataset/
+*.jsonl
+!requirements.txt
+
+# IDE
+.idea/
+.vscode/
