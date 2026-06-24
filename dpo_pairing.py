@@ -841,9 +841,9 @@ def run_pairing(
             c for c in cluster
             if c.get("training_use") == "recovery_training"
         ]
-        # 3. failure_pool: 真正失败的轨迹
+        # 3. failure_pool: 真正失败的轨迹（含 partial：部分完成后放弃也算失败案例）
         failure_pool = [c for c in cluster if c.get("outcome") in
-                     ("failure", "likely_failure", "unknown")]
+                     ("failure", "likely_failure", "unknown", "partial")]
         # 合并 recovery + failure 作为 DPO error-state 配对的候选池
         error_state_pool = recovery_pool + failure_pool
 

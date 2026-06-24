@@ -560,6 +560,51 @@ def aggregate_trajectory_file(path: Path) -> list[dict]:
         unique_tools = list({s["tool_name"] for s in tool_steps if s.get("tool_name")})
         rounds       = round_num
 
+        # ── Subagent 父子关联 ──
+        # 从事件流里提取 sessions_spawn 的调用参数，获取 child session id
+        # OpenClaw 的 sessions_spawn 返回值里通常包含 childSessionId 或 sessionId
+        subagent_spawns: list[dict] = []
+        parent_session_id: str | None = None
+
+        for ev in evs:
+            ev_type = ev.get("type", "")
+            data = ev.get("data") or {}
+
+            # 从 trace.artifacts 里找 sessions_spawn/sessions_yield 的 toolMetas
+            if ev_type == "trace.artifacts":
+                for tm in (data.get("toolMetas") or []):
+                    tool = tm.get("toolName") or tm.get("tool") or ""
+                    if "spawn" in tool.lower():
+                        # 从工具输入里提取任务描述
+                        inp = tm.get("input") or tm.get("args") or {}
+                        # 从工具返回里提取 child session id
+                        meta = tm.get("meta") or tm.get("output") or {}
+                        if isinstance(meta, str):
+                            try:
+                                meta = json.loads(meta)
+                            except Exception:
+                                meta = {}
+                        child_id = (
+                            meta.get("sessionId") or
+                            meta.get("childSessionId") or
+                            meta.get("id") or
+                            None
+                        )
+                        subagent_spawns.append({
+                            "child_session_id": child_id,
+                            "task": str(inp.get("task") or inp.get("prompt") or inp)[:300],
+                        })
+
+            # 从 session.started 里判断当前 session 是否是 subagent
+            # OpenClaw 在 subagent 启动事件里通常记录 parentSessionId
+            if ev_type == "session.started":
+                parent_session_id = (
+                    data.get("parentSessionId") or
+                    data.get("parent_session_id") or
+                    ev.get("parentSessionId") or
+                    None
+                )
+
         results.append({
             "session_id":   sid,
             "user_input":   user_input or "",
@@ -569,12 +614,17 @@ def aggregate_trajectory_file(path: Path) -> list[dict]:
             "agent":        agent,
             "model_version": model_version,
             "metadata": {
-                "model_version": model_version,
-                "session_key":   session_key,
-                "provider":      first_ev.get("provider", ""),
-                "tool_count":    len(tool_steps),
-                "rounds":        rounds,
-                "unique_tools":  unique_tools,
+                "model_version":    model_version,
+                "session_key":      session_key,
+                "provider":         first_ev.get("provider", ""),
+                "tool_count":       len(tool_steps),
+                "rounds":           rounds,
+                "unique_tools":     unique_tools,
+                # Subagent 协作信息
+                "parent_session_id":  parent_session_id,
+                "subagent_spawns":    subagent_spawns,
+                "is_subagent":        parent_session_id is not None,
+                "spawn_count":        len(subagent_spawns),
             },
             "session_outcome": outcome,
             "next_user_message": None,

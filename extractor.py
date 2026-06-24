@@ -138,6 +138,7 @@ class ExtractionPipeline:
                         TrainingUse.DPO_CANDIDATE,
                         TrainingUse.RECOVERY_TRAINING,
                         TrainingUse.SKILL_VIOLATION,
+                        TrainingUse.GRACEFUL_ABORT,
                     ):
                         continue
 
@@ -269,11 +270,24 @@ class ExtractionPipeline:
             ]
 
         elif use == TrainingUse.GRACEFUL_ABORT:
-            base["messages"]   = traj.to_sft_messages(HERMES_SYSTEM_PROMPT)
-            base["trajectory"] = traj.to_dict()
-            base["abort_reason"] = (
-                traj.final_output[:500] if traj.final_output else "unknown"
-            )
+            base["messages"]     = traj.to_sft_messages(HERMES_SYSTEM_PROMPT)
+            base["trajectory"]   = traj.to_dict()
+            # 提取最后一个 output 步骤内容作为中止信号
+            output_steps = [s for s in traj.steps if s.step_type == StepType.OUTPUT]
+            abort_text   = output_steps[-1].content if output_steps else (traj.final_output or "")
+            base["abort_signal"] = (abort_text or "")[:500]
+            # 分类中止原因
+            abort_lower = (abort_text or "").lower()
+            if any(w in abort_lower for w in ["超出", "限额", "out of scope", "beyond", "limit"]):
+                base["abort_reason"] = "scope_exceeded"
+            elif any(w in abort_lower for w in ["确认", "clarif", "confirm", "需要您", "need your"]):
+                base["abort_reason"] = "needs_confirmation"
+            elif any(w in abort_lower for w in ["分批", "batch", "筛选", "filter", "范围"]):
+                base["abort_reason"] = "data_too_large"
+            elif any(w in abort_lower for w in ["等待", "wait", "暂停", "pause"]):
+                base["abort_reason"] = "waiting_for_resource"
+            else:
+                base["abort_reason"] = "other"
 
         return base
 

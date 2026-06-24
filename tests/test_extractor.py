@@ -597,6 +597,88 @@ def test_pipeline_end_to_end():
 # 主函数
 # ─────────────────────────────────────────────────────────────────
 
+
+
+# ─────────────────────────────────────────────────────────────────
+# GRACEFUL_ABORT 专项测试
+# ─────────────────────────────────────────────────────────────────
+
+def test_graceful_abort():
+    section("GRACEFUL_ABORT 通道")
+    import sys, os
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from parsers import TrajectoryParser, OutcomeInferrer, TrainingValueScorer, TrainingUseClassifier
+    from models import TrainingUse, SessionOutcome
+
+    parser   = TrajectoryParser()
+    inferrer = OutcomeInferrer()
+    scorer   = TrainingValueScorer()
+    cls      = TrainingUseClassifier()
+
+    def classify(session):
+        traj = parser.parse(session)
+        traj.outcome     = inferrer.infer(traj)
+        traj.value_score = scorer.score(traj)
+        traj.training_use = cls.classify(traj)
+        return traj
+
+    # PARTIAL + 无错误 + 有工具调用 → GRACEFUL_ABORT
+    partial = {
+        "session_id": "abort_test_partial",
+        "user_input": {"raw": "导出所有客户"},
+        "trajectory": [
+            {"step_id": 1, "type": "reasoning", "content": "查询数量"},
+            {"step_id": 2, "type": "tool_call", "tool_name": "data_count",
+             "input_params": {}, "metadata": {"call_id": "tc_1"}},
+            {"step_id": 3, "type": "tool_result", "call_id": "tc_1",
+             "status": "success", "output": {"count": 2400000}},
+            {"step_id": 4, "type": "output", "content": "超出限额，建议筛选范围"},
+        ],
+        "final_output": "超出限额",
+        "session_outcome": {"status": "partial"},
+    }
+    traj = classify(partial)
+    assert_eq(traj.outcome, SessionOutcome.PARTIAL, "PARTIAL outcome 解析正确")
+    assert_eq(traj.training_use, TrainingUse.GRACEFUL_ABORT, "PARTIAL → GRACEFUL_ABORT")
+
+    # ABANDONED → GRACEFUL_ABORT
+    abandoned = {
+        "session_id": "abort_test_abandoned",
+        "user_input": {"raw": "执行高风险操作"},
+        "trajectory": [
+            {"step_id": 1, "type": "reasoning", "content": "需要确认"},
+            {"step_id": 2, "type": "tool_call", "tool_name": "exec",
+             "input_params": {}, "metadata": {"call_id": "tc_2"}},
+            {"step_id": 3, "type": "tool_result", "call_id": "tc_2",
+             "status": "success", "output": "ok"},
+            {"step_id": 4, "type": "output", "content": "需要您确认后继续"},
+        ],
+        "final_output": "等待确认",
+        "session_outcome": {"status": "abandoned"},
+    }
+    traj2 = classify(abandoned)
+    assert_eq(traj2.training_use, TrainingUse.GRACEFUL_ABORT, "ABANDONED → GRACEFUL_ABORT")
+
+    # 有工具错误的 PARTIAL 不进 GRACEFUL_ABORT
+    error_partial = {
+        "session_id": "abort_test_error",
+        "user_input": {"raw": "处理数据"},
+        "trajectory": [
+            {"step_id": 1, "type": "tool_call", "tool_name": "data_read",
+             "input_params": {}, "metadata": {"call_id": "tc_e"}},
+            {"step_id": 2, "type": "tool_result", "call_id": "tc_e",
+             "status": "error", "error": "Connection failed"},
+            {"step_id": 3, "type": "output", "content": "失败"},
+        ],
+        "final_output": "失败",
+        "session_outcome": {"status": "partial"},
+    }
+    traj3 = classify(error_partial)
+    assert_true(
+        traj3.training_use != TrainingUse.GRACEFUL_ABORT,
+        "有工具错误的 PARTIAL 不进 GRACEFUL_ABORT"
+    )
+
 def main():
     print(f"\n{Colors.BOLD}OpenClaw 轨迹提取器 — 测试套件{Colors.RESET}")
     print("=" * 50)
@@ -610,6 +692,7 @@ def main():
         test_pipeline_end_to_end,
         test_parser_error_inference,
         test_pipeline_recovery_training_with_tool_error,
+        test_graceful_abort,
     ]
 
     passed = 0

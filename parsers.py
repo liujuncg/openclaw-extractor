@@ -561,8 +561,11 @@ class TrainingUseClassifier:
             return TrainingUse.SKILL_VIOLATION
 
         # 主动中止轨迹 → 单独分桶（不丢弃）
-        if outcome == SessionOutcome.ABANDONED and len(traj.steps) >= 3:
-            return TrainingUse.GRACEFUL_ABORT
+        # ABANDONED: 用户/Agent 明确放弃；PARTIAL: 部分完成后主动停止
+        # 要求至少有1次工具调用（Agent 真正执行了操作），且无工具错误（不是因为出错才停）
+        if outcome in (SessionOutcome.ABANDONED, SessionOutcome.PARTIAL):
+            if len(traj.tool_calls) >= 1 and len(traj.error_steps) == 0 and len(traj.steps) >= 3:
+                return TrainingUse.GRACEFUL_ABORT
 
         # 有错误恢复轨迹
         if sc.recovery_value > self.RECOVERY_MIN_SCORE and len(traj.error_steps) > 0:
